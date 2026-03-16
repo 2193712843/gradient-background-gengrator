@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { useGradientGenerator } from '@/hooks/useGradientGenerator';
 import { colorPresets } from '@/lib/constants';
 import { colorToParam } from '@/lib/utils';
+import { getHarmonyColors } from '@/lib/colorHarmony';
 import { Download, RefreshCw, Plus, Trash2, Palette, Sparkles, Layers, Code, Zap } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -26,6 +27,14 @@ export default function GradientGenerator() {
   const [newColor, setNewColor] = useState('');
   const [apiLinkCopied, setApiLinkCopied] = useState(false);
   const [mounted, setMounted] = useState(false);
+  const [colorMode, setColorMode] = useState<'free' | 'recommended'>('free');
+  const [baseColor, setBaseColor] = useState('#5135FF');
+  const [recommendedColors, setRecommendedColors] = useState<string[]>(() =>
+    getHarmonyColors('#5135FF', 'auto')
+  );
+  const [wheelColorA, setWheelColorA] = useState<string>('#5135FF');
+  const [wheelColorB, setWheelColorB] = useState<string | null>(null);
+  const [nextWheelTarget, setNextWheelTarget] = useState<'A' | 'B'>('A');
 
   useEffect(() => {
     setMounted(true);
@@ -66,6 +75,111 @@ export default function GradientGenerator() {
     params.append('width', width.toString());
     params.append('height', height.toString());
     return `${baseUrl}?${params.toString()}`;
+  };
+
+  const updateRecommendations = (color: string) => {
+    const safe = color || '#5135FF';
+    const rec = getHarmonyColors(safe, 'auto');
+    setRecommendedColors(rec);
+  };
+
+  const handleBaseColorChange = (color: string) => {
+    setBaseColor(color);
+    updateRecommendations(color);
+  };
+
+  const applyRecommendedColors = () => {
+    const fromWheel: string[] = wheelColorB
+      ? [wheelColorA, wheelColorB]
+      : [wheelColorA];
+
+    const rest = recommendedColors.filter((c) => !fromWheel.includes(c));
+    const combined = [...fromWheel, ...rest].slice(0, 8);
+
+    setColors(combined);
+  };
+
+  const handleWheelClick = (event: React.MouseEvent<HTMLDivElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    const dx = event.clientX - cx;
+    const dy = event.clientY - cy;
+    const angle = Math.atan2(dy, dx); // -PI ~ PI, 以 x 轴为 0°
+    let hue = (angle * 180) / Math.PI;
+    hue = (hue + 360) % 360;
+    // 固定饱和度和亮度，得到色轮上的纯色
+    const s = 0.85;
+    const l = 0.55;
+    const c = (1 - Math.abs(2 * l - 1)) * s;
+    const x = c * (1 - Math.abs(((hue / 60) % 2) - 1));
+    const m = l - c / 2;
+
+    let r = 0;
+    let g = 0;
+    let b = 0;
+
+    if (hue >= 0 && hue < 60) {
+      r = c;
+      g = x;
+    } else if (hue >= 60 && hue < 120) {
+      r = x;
+      g = c;
+    } else if (hue >= 120 && hue < 180) {
+      g = c;
+      b = x;
+    } else if (hue >= 180 && hue < 240) {
+      g = x;
+      b = c;
+    } else if (hue >= 240 && hue < 300) {
+      r = x;
+      b = c;
+    } else {
+      r = c;
+      b = x;
+    }
+
+    const to255 = (v: number) => Math.round((v + m) * 255);
+    const toHex = (v: number) => v.toString(16).padStart(2, '0').toUpperCase();
+
+    const R = to255(r);
+    const G = to255(g);
+    const B = to255(b);
+    const hex = `#${toHex(R)}${toHex(G)}${toHex(B)}`;
+
+    // 更新推荐算法的基准色
+    handleBaseColorChange(hex);
+
+    // 在两个锚点颜色之间轮流写入
+    if (nextWheelTarget === 'A') {
+      setWheelColorA(hex);
+      setNextWheelTarget('B');
+    } else {
+      setWheelColorB(hex);
+      setNextWheelTarget('A');
+    }
+
+    // 根据当前模式，直接响应到渐变颜色列表
+    if (colorMode === 'recommended') {
+      // 推荐模式：使用两个锚点色 + 推荐结果，直接覆盖 colors
+      const fromWheel: string[] = wheelColorB
+        ? [wheelColorA, hex] // 第二个点刚刚选择，用最新的 hex
+        : [hex];
+
+      const rest = getHarmonyColors(hex, 'auto').filter(
+        (c) => !fromWheel.includes(c)
+      );
+      const combined = [...fromWheel, ...rest].slice(0, 8);
+      setColors(combined);
+    } else {
+      // 自由模式：将点击得到的颜色直接加入当前 colors（上限 8 个）
+      const exists = colors.includes(hex);
+      if (!exists) {
+        const nextColors =
+          colors.length < 8 ? [...colors, hex] : [...colors.slice(1), hex];
+        setColors(nextColors);
+      }
+    }
   };
 
   const copyApiLink = async () => {
@@ -220,63 +334,193 @@ export default function GradientGenerator() {
                   {colors.length}/8
                 </span>
               </div>
-              
-              <div className="space-y-3 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
-                {colors.map((color, index) => (
-                  <div key={index} className="flex items-center gap-3 group">
-                    <div className="relative flex-shrink-0">
-                       <Input
-                        type="color"
-                        value={color}
-                        onChange={(e) => handleColorChange(index, e.target.value)}
-                        className="w-12 h-12 p-1 rounded-xl cursor-pointer border-2 hover:border-primary transition-colors"
-                      />
-                    </div>
-                    <Input
-                      type="text"
-                      value={color.toUpperCase()}
-                      onChange={(e) => handleColorChange(index, e.target.value)}
-                      className="font-mono text-sm tracking-wider uppercase"
-                    />
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => removeColor(index)}
-                      disabled={colors.length <= 1}
-                      className="text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </Button>
-                  </div>
-                ))}
+
+              {/* 统一色轮（自由模式与推荐模式都可点击直接生效） */}
+              <div className="flex flex-col items-center gap-2">
+                <div
+                  className="w-32 h-32 rounded-full border border-border shadow-inner cursor-crosshair"
+                  style={{
+                    background:
+                      'conic-gradient(from 0deg, #FF0000, #FFFF00, #00FF00, #00FFFF, #0000FF, #FF00FF, #FF0000)',
+                  }}
+                  onClick={handleWheelClick}
+                />
+                <span className="text-[11px] text-muted-foreground text-center">
+                  {colorMode === 'recommended'
+                    ? '在色轮上点击，可选择最多两个锚点色，并自动生成推荐配色'
+                    : '在色轮上点击，直接将该颜色加入当前渐变颜色列表'}
+                </span>
               </div>
 
-               {colors.length < 8 && (
-                <div className="flex items-center gap-3 pt-2">
-                   <div className="relative flex-shrink-0">
+              {/* 模式切换：自由选择 / 推荐模式 */}
+              <div className="inline-flex rounded-full border border-border bg-muted/60 p-1 text-xs font-medium">
+                <button
+                  type="button"
+                  className={cn(
+                    'px-3 py-1 rounded-full transition-colors',
+                    colorMode === 'free'
+                      ? 'bg-background text-foreground shadow-sm'
+                      : 'text-muted-foreground'
+                  )}
+                  onClick={() => setColorMode('free')}
+                >
+                  自由选择
+                </button>
+                <button
+                  type="button"
+                  className={cn(
+                    'px-3 py-1 rounded-full transition-colors',
+                    colorMode === 'recommended'
+                      ? 'bg-background text-foreground shadow-sm'
+                      : 'text-muted-foreground'
+                  )}
+                  onClick={() => setColorMode('recommended')}
+                >
+                  推荐模式
+                </button>
+              </div>
+
+              {colorMode === 'free' && (
+                <>
+                  <div className="space-y-3 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
+                    {colors.map((color, index) => (
+                      <div key={index} className="flex items-center gap-3 group">
+                        <div className="relative flex-shrink-0">
+                          <Input
+                            type="color"
+                            value={color}
+                            onChange={(e) => handleColorChange(index, e.target.value)}
+                            className="w-12 h-12 p-1 rounded-xl cursor-pointer border-2 hover:border-primary transition-colors"
+                          />
+                        </div>
+                        <Input
+                          type="text"
+                          value={color.toUpperCase()}
+                          onChange={(e) => handleColorChange(index, e.target.value)}
+                          className="font-mono text-sm tracking-wider uppercase"
+                        />
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => removeColor(index)}
+                          disabled={colors.length <= 1}
+                          className="text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+
+                  {colors.length < 8 && (
+                    <div className="flex items-center gap-3 pt-2">
+                      <div className="relative flex-shrink-0">
+                        <Input
+                          type="color"
+                          value={newColor || '#000000'}
+                          onChange={(e) => setNewColor(e.target.value)}
+                          className="w-12 h-12 p-1 rounded-xl cursor-pointer border-2 border-dashed border-muted-foreground/30 hover:border-primary transition-colors"
+                        />
+                      </div>
                       <Input
-                        type="color"
-                        value={newColor || '#000000'}
+                        type="text"
+                        placeholder="#000000"
+                        value={newColor.toUpperCase()}
                         onChange={(e) => setNewColor(e.target.value)}
-                         className="w-12 h-12 p-1 rounded-xl cursor-pointer border-2 border-dashed border-muted-foreground/30 hover:border-primary transition-colors"
+                        className="font-mono text-sm tracking-wider uppercase"
                       />
-                   </div>
-                   <Input
-                      type="text"
-                      placeholder="#000000"
-                      value={newColor.toUpperCase()}
-                      onChange={(e) => setNewColor(e.target.value)}
-                      className="font-mono text-sm tracking-wider uppercase"
-                    />
-                   <Button 
-                    onClick={addColor}
-                    disabled={!newColor}
-                    className="bg-secondary text-secondary-foreground hover:bg-secondary/80"
-                  >
-                    <Plus className="w-4 h-4" />
-                  </Button>
+                      <Button
+                        onClick={addColor}
+                        disabled={!newColor}
+                        className="bg-secondary text-secondary-foreground hover:bg-secondary/80"
+                      >
+                        <Plus className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {colorMode === 'recommended' && (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-[minmax(0,1.2fr)_minmax(0,1.8fr)] gap-4 items-center">
+                    {/* 基准色与推荐结果 */}
+                    <div className="space-y-3">
+                      <div className="flex items-center gap-3">
+                        <Input
+                          type="color"
+                          value={baseColor}
+                          onChange={(e) => handleBaseColorChange(e.target.value)}
+                          className="w-12 h-12 p-1 rounded-xl cursor-pointer border-2 hover:border-primary transition-colors"
+                        />
+                        <Input
+                          type="text"
+                          value={baseColor.toUpperCase()}
+                          onChange={(e) => handleBaseColorChange(e.target.value)}
+                          className="font-mono text-sm tracking-wider uppercase"
+                        />
+                      </div>
+
+                      {/* 色轮选中的两个锚点颜色 */}
+                      <div className="flex flex-col gap-1 text-[11px] text-muted-foreground">
+                        <div className="flex items-center gap-2">
+                          <span>颜色 1：</span>
+                          <span
+                            className="w-4 h-4 rounded-full border border-border/60"
+                            style={{ backgroundColor: wheelColorA }}
+                          />
+                          <span className="font-mono">
+                            {wheelColorA.toUpperCase()}
+                          </span>
+                        </div>
+                        {wheelColorB && (
+                          <div className="flex items-center gap-2">
+                            <span>颜色 2：</span>
+                            <span
+                              className="w-4 h-4 rounded-full border border-border/60"
+                              style={{ backgroundColor: wheelColorB }}
+                            />
+                            <span className="font-mono">
+                              {wheelColorB.toUpperCase()}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-medium text-muted-foreground">
+                            推荐颜色组合（基于互补 / 类似 / 三分配色）
+                          </span>
+                          <Button
+                            size="sm"
+                            className="h-7 px-3 text-xs"
+                            onClick={applyRecommendedColors}
+                          >
+                            应用到渐变
+                          </Button>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {recommendedColors.map((c) => (
+                            <button
+                              key={c}
+                              type="button"
+                              className="flex items-center gap-1 rounded-full border border-border px-2 py-1 text-[11px] font-mono bg-background hover:border-primary/80 transition-colors"
+                              onClick={() => handleBaseColorChange(c)}
+                            >
+                              <span
+                                className="w-4 h-4 rounded-full border border-border/60"
+                                style={{ backgroundColor: c }}
+                              />
+                              <span>{c.toUpperCase()}</span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
-               )}
+              )}
             </div>
 
             {/* Presets */}
